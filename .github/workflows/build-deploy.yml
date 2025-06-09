@@ -1,0 +1,41 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: ["staging"]
+
+env:
+  IMAGE_NAME: flex-api
+  DOCKER_USER: ${{secrets.DOCKER_USER}}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v3
+      - name: Docker login
+        run: docker login -u ${{secrets.DOCKER_USER}} -p ${{secrets.DOCKER_PASSWORD}}
+      - name: Build the Docker image
+        run: docker build . --file Dockerfile --tag ${{secrets.DOCKER_USER}}/$(echo $IMAGE_NAME)
+      - name: Docker push to Hub
+        run: docker push ${{secrets.DOCKER_USER}}/$(echo $IMAGE_NAME)
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{secrets.FLEXIO_SERVER_SSH_PRIVATE}}
+      - name: SSH into server and deploy using docker-compose
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{secrets.FLEXIO_SERVER_USER}}@${{secrets.FLEXIO_SERVER_HOST_URL}} << 'EOF'
+            cd flexio
+            echo ok
+            docker compose pull flex-api
+            docker compose up -d --force-recreate flex-api
+            docker compose exec nginx nginx -s reload
+            docker image prune -a -f
+            exit
+          EOF

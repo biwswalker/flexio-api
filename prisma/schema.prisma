@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique @db.VarChar(100)
+  email     String   @unique @db.VarChar(255)
+  password  String   @db.VarChar(255)
+  name      String   @db.VarChar(200)
+  role      UserRole
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  userBranches  UserBranch[]
+  transactions  Transaction[]
+  dailyBalances DailyBalance[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model UserBranch {
+  id        String   @id @default(cuid())
+  userId    String
+  branchId  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId])
+  @@map("user_branches")
+}
+
+model Branch {
+  id        String     @id @default(cuid())
+  code      String     @unique @db.VarChar(10)
+  name      String     @db.VarChar(200)
+  type      BranchType
+  address   String?    @db.Text
+  phone     String?    @db.VarChar(20)
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Relations
+  userBranches UserBranch[]
+  bankAccounts BankAccount[]
+
+  @@map("branches")
+}
+
+model BankAccount {
+  id             String   @id @default(cuid())
+  accountNumber  String   @db.VarChar(20)
+  accountName    String   @db.VarChar(100)
+  bankName       String   @db.VarChar(100)
+  bankBranch     String   @db.VarChar(100)
+  branchId       String
+  currentBalance Decimal  @default(0) @db.Decimal(15, 2)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  branch        Branch         @relation(fields: [branchId], references: [id])
+  transactions  Transaction[]
+  dailyBalances DailyBalance[]
+
+  @@map("bank_accounts")
+}
+
+model TransactionCategory {
+  id              String          @id @default(cuid())
+  name            String          @db.VarChar(100)
+  transactionType TransactionType
+  description     String?         @db.Text
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  transactions Transaction[]
+
+  @@map("transaction_categories")
+}
+
+model Transaction {
+  id                   String          @id @default(cuid())
+  transactionDate      DateTime        @db.Date
+  transactionTime      DateTime        @db.Time
+  type                 TransactionType
+  amount               Decimal         @db.Decimal(15, 2)
+  balanceAfter         Decimal         @db.Decimal(15, 2)
+  note                 String?         @db.Text
+  referenceNumber      String?         @db.VarChar(50)
+  bankAccountId        String
+  categoryId           String?
+  createdBy            String
+  relatedTransactionId String?         @unique
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  // Relations
+  bankAccount         BankAccount          @relation(fields: [bankAccountId], references: [id])
+  category            TransactionCategory? @relation(fields: [categoryId], references: [id])
+  user                User                 @relation(fields: [createdBy], references: [id])
+  relatedTransaction  Transaction?         @relation("TransferRelation", fields: [relatedTransactionId], references: [id])
+  transferTransaction Transaction?         @relation("TransferRelation")
+
+  @@map("transactions")
+}
+
+model DailyBalance {
+  id               String   @id @default(cuid())
+  balanceDate      DateTime @db.Date
+  bankAccountId    String
+  openingBalance   Decimal  @db.Decimal(15, 2)
+  closingBalance   Decimal  @db.Decimal(15, 2)
+  actualBalance    Decimal  @db.Decimal(15, 2)
+  totalDeposits    Decimal  @db.Decimal(15, 2)
+  totalWithdrawals Decimal  @db.Decimal(15, 2)
+  totalExpenses    Decimal  @db.Decimal(15, 2)
+  totalTransfers   Decimal  @db.Decimal(15, 2)
+  unknownDeposits  Decimal  @db.Decimal(15, 2)
+  profit           Decimal  @db.Decimal(15, 2)
+  isClosed         Boolean  @default(false)
+  closedBy         String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  user        User?       @relation(fields: [closedBy], references: [id])
+
+  @@unique([balanceDate, bankAccountId])
+  @@map("daily_balances")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String   @db.VarChar(50)
+  entityType String   @db.VarChar(50)
+  entityId   String
+  oldData    Json?
+  newData    Json?
+  userId     String
+  ipAddress  String?  @db.Inet
+  createdAt  DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+enum UserRole {
+  OWNER
+  BRANCH_MANAGER
+  BRANCH_USER
+}
+
+enum BranchType {
+  MAIN
+  SUB
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  EXPENSE
+  TRANSFER
+}
