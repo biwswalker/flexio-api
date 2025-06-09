@@ -5,7 +5,7 @@ on:
     branches: ["staging"]
 
 env:
-  IMAGE_NAME: flex-api
+  IMAGE_NAME: flexio-api
   DOCKER_USER: ${{secrets.DOCKER_USER}}
 
 jobs:
@@ -33,8 +33,8 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{secrets.FLEXIO_SERVER_USER}}@${{secrets.FLEXIO_SERVER_HOST_URL}} << 'EOF'
             cd flexio
             echo ok
-            docker compose pull flex-api
-            docker compose up -d --force-recreate flex-api
+            docker compose pull flexio-api
+            docker compose up -d --force-recreate flexio-api
             docker compose exec nginx nginx -s reload
             docker image prune -a -f
             exit
