@@ -45,7 +45,7 @@ model UserBranch {
 
 model Branch {
   id        String     @id @default(cuid())
-  code      String     @unique @db.VarChar(10)
+  code      String     @unique @db.VarChar(100)
   name      String     @db.VarChar(200)
   type      BranchType
   address   String?    @db.Text
