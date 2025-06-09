@@ -58,7 +58,9 @@ export const getTransactions = async (
         : undefined;
 
     const where = {
-      ...(bank_account_id && { bankAccountId: { in: bank_account_id as string[] } }),
+      ...(bank_account_id && {
+        bankAccountId: { in: bank_account_id as string[] },
+      }),
       ...(tx_date && { transactionDate: new Date(tx_date as string) }),
       ...(parsedType && { type: parsedType as any }),
       // ถ้าไม่ใช่ Admin ให้ดูเฉพาะรายการในสาขาที่ตัวเองเข้าถึงได้
@@ -177,7 +179,26 @@ export const createTransaction = async (
       createdBy: req.user.id,
     });
 
-    sendSuccess(res, result, "Transaction created successfully", 201);
+    // ✅ UPDATED: ส่งข้อมูลเพิ่มเติมเกี่ยวกับผลกระทบต่อ daily balance
+    let message = "Transaction created successfully";
+    if (result.reopenedDailyBalance) {
+      message +=
+        ". Daily balance for this date has been reopened for recalculation.";
+    }
+
+    sendSuccess(
+      res,
+      {
+        transaction: result.transaction,
+        relatedTransaction: result.relatedTransaction,
+        reopenedDailyBalance: result.reopenedDailyBalance,
+        warning: result.reopenedDailyBalance
+          ? "Daily balance needs to be reclosed"
+          : null,
+      },
+      message,
+      201
+    );
   } catch (error) {
     console.error("Create transaction error:", error);
 
@@ -202,7 +223,7 @@ export const updateTransaction = async (
 ): Promise<void> => {
   try {
     const { id } = req.params;
-    const { amount, note, categoryId } = req.body;
+    const { amount, note, category_id } = req.body;
 
     if (!req.user) {
       sendError(res, "UNAUTHORIZED", "User not authenticated", 401);
@@ -211,11 +232,31 @@ export const updateTransaction = async (
 
     const result = await TransactionService.updateTransaction(
       id,
-      { amount: amount ? parseFloat(amount) : undefined, note, categoryId },
+      { amount: amount ? parseFloat(amount) : undefined, note, categoryId: category_id },
       req.user.id
     );
 
-    sendSuccess(res, result, "Transaction updated successfully");
+    // ✅ UPDATED: ส่งข้อมูลเพิ่มเติมเกี่ยวกับผลกระทบต่อ daily balance
+    let message = "Transaction updated successfully";
+    if (result.isHistoricalUpdate) {
+      message += ". This is a historical transaction update.";
+    }
+    if (result.reopenedDailyBalance) {
+      message += " Daily balance has been reopened for recalculation.";
+    }
+
+    sendSuccess(
+      res,
+      {
+        transaction: result.transaction,
+        isHistoricalUpdate: result.isHistoricalUpdate,
+        reopenedDailyBalance: result.reopenedDailyBalance,
+        warning: result.reopenedDailyBalance
+          ? "Daily balance needs to be reclosed"
+          : null,
+      },
+      message
+    );
   } catch (error) {
     console.error("Update transaction error:", error);
     sendError(res, "INTERNAL_ERROR", "Failed to update transaction", 500);
@@ -234,10 +275,141 @@ export const deleteTransaction = async (
       return;
     }
 
-    await TransactionService.deleteTransaction(id, req.user.id);
-    sendSuccess(res, null, "Transaction deleted successfully");
+    const result = await TransactionService.deleteTransaction(id, req.user.id);
+
+    // ✅ UPDATED: ส่งข้อมูลเพิ่มเติมเกี่ยวกับผลกระทบต่อ daily balance
+    let message = "Transaction deleted successfully";
+    if (result.isHistoricalDeletion) {
+      message += ". This was a historical transaction deletion.";
+    }
+    if (result.reopenedDailyBalance) {
+      message += " Daily balance has been reopened for recalculation.";
+    }
+
+    sendSuccess(
+      res,
+      {
+        success: result.success,
+        isHistoricalDeletion: result.isHistoricalDeletion,
+        reopenedDailyBalance: result.reopenedDailyBalance,
+        warning: result.reopenedDailyBalance
+          ? "Daily balance needs to be reclosed"
+          : null,
+      },
+      message
+    );
   } catch (error) {
     console.error("Delete transaction error:", error);
     sendError(res, "INTERNAL_ERROR", "Failed to delete transaction", 500);
+  }
+};
+
+export const bulkUpdateHistoricalTransactions = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { updates } = req.body;
+
+    if (!req.user) {
+      sendError(res, "UNAUTHORIZED", "User not authenticated", 401);
+      return;
+    }
+
+    // ตรวจสอบสิทธิ์ (เฉพาะ ADMIN และ BRANCH_MANAGER)
+    if (
+      ![UserRole.OWNER, UserRole.BRANCH_MANAGER].includes(req.user.role as any)
+    ) {
+      sendError(
+        res,
+        "FORBIDDEN",
+        "Insufficient permissions for bulk updates",
+        403
+      );
+      return;
+    }
+
+    if (!Array.isArray(updates) || updates.length === 0) {
+      sendError(
+        res,
+        "VALIDATION_ERROR",
+        "Updates array is required and cannot be empty"
+      );
+      return;
+    }
+
+    const result = await TransactionService.bulkUpdateHistoricalTransactions(
+      updates,
+      req.user.id
+    );
+
+    sendSuccess(
+      res,
+      {
+        ...result,
+        warning:
+          "Affected daily balances have been reopened and need to be reclosed",
+      },
+      "Bulk update completed successfully"
+    );
+  } catch (error) {
+    console.error("Bulk update transactions error:", error);
+    sendError(res, "INTERNAL_ERROR", "Failed to bulk update transactions", 500);
+  }
+};
+
+// ✅ NEW: Get transaction impact on daily balance
+export const getTransactionDailyBalanceImpact = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { bank_account_id, date } = req.query;
+
+    if (!bank_account_id || !date) {
+      sendError(
+        res,
+        "VALIDATION_ERROR",
+        "Bank account ID and date are required"
+      );
+      return;
+    }
+
+    // ตรวจสอบว่าวันนั้นมี daily balance หรือไม่
+    const dailyBalance = await prisma.dailyBalance.findUnique({
+      where: {
+        balanceDate_bankAccountId: {
+          balanceDate: new Date(date as string),
+          bankAccountId: bank_account_id as string,
+        },
+      },
+    });
+
+    // นับ transactions ในวันนั้น
+    const transactionCount = await prisma.transaction.count({
+      where: {
+        bankAccountId: bank_account_id as string,
+        transactionDate: new Date(date as string),
+      },
+    });
+
+    sendSuccess(res, {
+      hasTransactions: transactionCount > 0,
+      transactionCount,
+      hasDailyBalance: !!dailyBalance,
+      isDailyBalanceClosed: dailyBalance?.isClosed || false,
+      canModifyTransactions: !dailyBalance?.isClosed,
+      impact: {
+        modifyingTransactions: dailyBalance?.isClosed
+          ? "Will reopen daily balance"
+          : "No impact",
+        recommendation: dailyBalance?.isClosed
+          ? "Daily balance will need to be reclosed after modifications"
+          : "Safe to modify transactions",
+      },
+    });
+  } catch (error) {
+    console.error("Get transaction impact error:", error);
+    sendError(res, "INTERNAL_ERROR", "Failed to get transaction impact", 500);
   }
 };
